@@ -1,0 +1,161 @@
+package com.example.shiyanonebeita;
+
+import android.os.Bundle;
+import androidx.appcompat.app.AppCompatActivity;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.telephony.PhoneStateListener;
+import android.telephony.SignalStrength;
+import android.telephony.TelephonyManager;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import android.Manifest;
+import android.os.Handler;
+import android.os.Looper;
+
+
+public class FriActivity extends AppCompatActivity {
+    private TextView signalStrengthTextView;
+    //以下两个声明由于不是全局变量，所以可以做局部变量，提高代码的可读性
+    //但是我设置在这里是以防在多个方法使用他们，暂时留着，也可能做玩也不会在另一个方法使用
+    private TelephonyManager telephonyManager;
+    private PhoneStateListener phoneStateListener;
+    private Handler handler;
+
+    //初始化界面
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        //设置布局
+        setContentView(R.layout.fristlayout);
+        //检查控件
+        signalStrengthTextView = findViewById(R.id.signal_strength_textview);
+        //检查是否授权
+        if (checkPermissions()) {
+            setupTelephonyManager();
+            // 初始化定时器，每隔一段时间更新信号强度
+            handler = new Handler(Looper.getMainLooper());
+            handler.postDelayed(signalStrengthChecker, 1000); // 每隔1秒更新一次
+        }
+    }
+
+
+    private boolean checkPermissions() {
+        //监测安卓的版本是否大于6.0，低于6.0不能使用动态请求权限
+        //这里好像提醒了不需要监测，因为minSdkVersion 已经设定为 24 或更高
+        //那么检查设备的 Android 版本是否为 6.0 以上的代码确实是多余的
+        //但是我第一次做这种东西，以免改完出问题就不删除了
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            //检查应用是否被授予读取手机状态的权限
+            if(checkSelfPermission(Manifest.permission.READ_PHONE_STATE)!=PackageManager.PERMISSION_GRANTED){
+                //如果权限没有通过，加申请权限，并返回错误
+                ActivityCompat.requestPermissions(this,new String[]{Manifest.permission.READ_PHONE_STATE},1);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void setupTelephonyManager(){
+        telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+        //创建一个 PhoneStateListener对象，在信号强度变化时更新界面上的信号强度文本
+        phoneStateListener = new PhoneStateListener(){
+            @Override
+            public void onSignalStrengthsChanged(SignalStrength signalStrength){
+                //获取信号的强度
+                super.onSignalStrengthsChanged(signalStrength);
+                int strength = getSignalStrength(signalStrength);
+                //输出到界面
+                signalStrengthTextView.setText("Signal Strength:"+ strength + " dBm");
+            }
+        };
+        //注册监听器，以便监听信号强度大变化
+        telephonyManager.listen(phoneStateListener,PhoneStateListener.LISTEN_SIGNAL_STRENGTHS);
+    }
+
+    //根据不同的网络类型计算信号强度并返回一个整数
+    private int getSignalStrength(SignalStrength signalStrength) {
+        int strength = 0;
+        if (signalStrength != null) {
+            //如果是GSM网络
+            if (signalStrength.isGsm()) {
+                strength = signalStrength.getGsmSignalStrength();
+                if (strength != 99) { // 99 表示未知的 GSM 信号强度
+                    //转换单位为dBm
+                    strength = (strength * 2) - 113;
+                }
+                //如果不是就获取CDMA 和 EVDO 的信号强度并返回较大值
+            } else {
+                //如果不是GSM网络，计算CDMA 和 EVDO 的信号强度并加权
+                int cdmaDbm = signalStrength.getCdmaDbm();
+                int evdoDbm = signalStrength.getEvdoDbm();
+                if (cdmaDbm != -1 && evdoDbm != -1) {
+                    //对 CDMA 和 EVDO 的信号强度进行加权
+                    //根据实际情况调整权重
+                    //网络类型重要的就分给更高的权重
+                    //哪个信号强，加给哪个更高的权重
+                    double weightedCdmaDbm = cdmaDbm * 0.6;
+                    double weightedEvdoDbm = evdoDbm * 0.4;
+                    strength = (int) (weightedCdmaDbm + weightedEvdoDbm);
+                }
+            }
+        }
+        return strength;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults){
+        super.onRequestPermissionsResult(requestCode, permissions,grantResults);
+        if(requestCode == 1){
+            if(grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED){
+                //用户授予权限
+                setupTelephonyManager();
+            }
+            else{
+                //用户拒绝了权限,加弹出toast来提醒
+                Toast.makeText(this,"Permission denied.",Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    // 定时器任务，用于定期检查并更新信号强度
+    private Runnable signalStrengthChecker = new Runnable() {
+        @Override
+        public void run() {
+            if (telephonyManager != null) {
+                try {
+                    SignalStrength signalStrength = telephonyManager.getSignalStrength();
+                    if (signalStrength != null) {
+                        int strength = getSignalStrength(signalStrength);
+                        signalStrengthTextView.setText("Signal Strength: " + strength + " dBm");
+                    } else {
+                        signalStrengthTextView.setText("Signal Strength: N/A");
+                    }
+                } catch (SecurityException e) {
+                    // 处理权限异常
+                    signalStrengthTextView.setText("Permission denied");
+                } catch (Exception e) {
+                    // 处理其他异常
+                    signalStrengthTextView.setText("Error fetching signal strength");
+                }
+            }
+            // 继续下一个周期
+            handler.postDelayed(this, 5000); // 每隔5秒更新一次
+        }
+    };
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // 移除定时器任务，避免内存泄漏
+        if (handler != null) {
+            handler.removeCallbacks(signalStrengthChecker);
+        }
+    }
+
+
+
+}
